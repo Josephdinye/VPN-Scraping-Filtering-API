@@ -1,0 +1,38 @@
+name: Global Node Validation API Sync
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  sweep-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: |
+          mkdir -p raw dist api
+          pip install -r requirements.txt
+
+      - name: Scrape feeds
+        run: python scraper.py
+
+      - name: Filter working only
+        run: python validator.py
+
+      - name: Commit & Push
+        run: |
+          git config user.name "vpn-bot"
+          git config user.email "bot@github.com"
+          git add raw/ dist/
+          WORKING=$(cat dist/working.txt | wc -l)
+          git commit -m "auto: $WORKING working nodes" || echo "no changes"
+          git push
