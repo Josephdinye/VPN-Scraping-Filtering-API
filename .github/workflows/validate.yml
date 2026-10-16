@@ -7,12 +7,18 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: write # <-- THIS FIXES 403
+
 jobs:
   sweep-and-publish:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
 
       - uses: actions/setup-python@v5
         with:
@@ -34,5 +40,9 @@ jobs:
           git config user.email "bot@github.com"
           git add raw/ dist/
           WORKING=$(cat dist/working.txt | wc -l)
-          git commit -m "auto: $WORKING working nodes" || echo "no changes"
+          if git diff --staged --quiet; then
+            echo "No changes"
+            exit 0
+          fi
+          git commit -m "auto: $WORKING working nodes"
           git push
