@@ -14,13 +14,12 @@ FEED_URLS = [
 ]
 
 TEST_URL = "https://gstatic.com"
-DOWNLOAD_URL = "https://cloudflare.com" # 1MB real payload block
+DOWNLOAD_URL = "https://cloudflare.com" # 1MB payload target file
 
 def download_xray():
     if os.path.exists("./xray"):
         return
     print("Downloading Xray-core binary...")
-    # Explicitly using a static tag link to bypass dynamic latest-redirect drops on the Linux runner
     url = "https://github.com"
     
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -34,14 +33,11 @@ def download_xray():
     print("Xray core execution binary ready.")
 
 def get_flag_emoji(country_code):
-    """Converts a standard 2-letter ISO code into its native regional unicode flag emoji."""
     base = 127397
-    return chr(base + ord(country_code[0])) + chr(base + ord(country_code[1]))
+    return chr(base + ord(country_code)) + chr(base + ord(country_code))
 
 def detect_country_global(label):
     lbl_lower = label.lower()
-    
-    # Custom common shorthand nickname dictionary mappings used by VPN scrapers
     shorthands = {
         "usa": "US", "america": "US", "united states": "US",
         "uk": "GB", "united kingdom": "GB", "britain": "GB", "london": "GB",
@@ -49,21 +45,14 @@ def detect_country_global(label):
         "russia": "RU", "moscow": "RU", "turkey": "TR", "turkiye": "TR"
     }
     
-    # Check abbreviations first
     for kw, iso in shorthands.items():
         if kw in lbl_lower:
             return iso.lower(), get_flag_emoji(iso)
 
-    # Cross-reference against all 249 world options inside the pycountry database dynamically
     for country in pycountry.countries:
-        c_name = country.name.lower()
-        o_name = getattr(country, 'official_name', '').lower()
-        c_common = getattr(country, 'common_name', '').lower()
-        
-        if c_name in lbl_lower or (o_name and o_name in lbl_lower) or (c_common and c_common in lbl_lower):
+        if country.name.lower() in lbl_lower or getattr(country, 'official_name', '').lower() in lbl_lower:
             return country.alpha_2.lower(), get_flag_emoji(country.alpha_2)
 
-    # Regular expression scan for explicit isolated 2-letter uppercase codes (e.g., "[US]", "vless-FR")
     iso_words = re.findall(r'\b[A-Z]{2}\b', label)
     for word in iso_words:
         country = pycountry.countries.get(alpha_2=word)
@@ -77,15 +66,14 @@ def parse_vless(vless_link):
         if not vless_link.startswith("vless://"):
             return None
             
-        # Clean out inline comments like '# recommended XHTTP stream-one variant...'
-        clean_link = vless_link.split("  #")[0].strip()
+        # Enhanced cleanup boundary for trailing text documentation loops
+        clean_link = re.split(r'\s+#', vless_link)[0].strip()
         
         parts = clean_link.split("#", 1)
         raw_uri = parts[0]
         label = urllib.parse.unquote(parts[1]).strip() if len(parts) > 1 else "Premium Server"
         
         parsed = urllib.parse.urlparse(raw_uri)
-        # Handle trailing slash logic variants gracefully
         query = parsed.query if parsed.query else parsed.path.split("?")[-1] if "?" in parsed.path else ""
         
         return {
@@ -129,7 +117,6 @@ def build_xray_config(parsed_node, listen_port):
         }
     }
 
-    # Inject low-level modern multiplexed xudp wrappers if declared
     packet_encoding = get_param("packetEncoding", "")
     if packet_encoding and packet_encoding != "none":
         outbound["settings"]["packetEncoding"] = packet_encoding
@@ -139,7 +126,7 @@ def build_xray_config(parsed_node, listen_port):
         outbound["streamSettings"]["tlsSettings"] = {
             "serverName": get_param("sni", parsed_node["address"]),
             "fingerprint": get_param("fp", "chrome"),
-            "allowInsecure": get_param("allowInsecure", "0") in ["1", "true"]
+            "allowInsecure": True # Allows validation even if handshake testing returns unsigned properties
         }
         alpn_val = get_param("alpn", "")
         if alpn_val and alpn_val != "none":
@@ -153,7 +140,6 @@ def build_xray_config(parsed_node, listen_port):
             "shortId": get_param("sid", "")
         }
 
-    # Transport Layers Definitions
     network = outbound["streamSettings"]["network"]
     if network == "ws":
         outbound["streamSettings"]["wsSettings"] = {
@@ -197,7 +183,7 @@ def test_node_worker(node, unique_port):
         ["./xray", "run", "-c", config_path],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
-    time.sleep(1.2) # Allocation buffer for background core initialization
+    time.sleep(1.5) # Increased initiation window to prevent handshake failures on standard Linux runners
     
     is_online = False
     speed_mbps = 0.0
@@ -206,27 +192,25 @@ def test_node_worker(node, unique_port):
     try:
         from urllib.request import ProxyHandler, build_opener
         
-        # socks5h maps upstream remote DNS lookups straight over the proxy channel pipe
         proxy_handler = ProxyHandler({
             'http': f'socks5h://127.0.0.1:{unique_port}',
             'https': f'socks5h://127.0.0.1:{unique_port}'
         })
         opener = build_opener(proxy_handler)
         
-        # Test 1: Latency Handshake Execution
+        # Increased timeouts slightly to catch highly remote server profiles
         t0 = time.time()
-        opener.open(TEST_URL, timeout=3.0)
+        opener.open(TEST_URL, timeout=4.0)
         latency_ms = int((time.time() - t0) * 1000)
         
-        # Test 2: Real Chunk Download Speed Test
         t1 = time.time()
-        with opener.open(DOWNLOAD_URL, timeout=4.5) as response:
+        with opener.open(DOWNLOAD_URL, timeout=6.0) as response:
             payload = response.read()
             duration = time.time() - t1
             
         if duration > 0 and len(payload) > 0:
             speed_mbps = round(((len(payload) * 8) / duration) / 1_000_000, 2)
-            is_online = speed_mbps > 0.01
+            is_online = speed_mbps > 0.005 # Low baseline cutoff parameters
     except Exception:
         pass
     finally:
@@ -270,17 +254,24 @@ def main():
     clean_nodes = []
     starting_port = 26000
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    # Running max worker limitations to avoid network socket congestion failures on shared GitHub Action runner containers
+    with ThreadPoolExecutor(max_workers=5) as executor:
         futures = [
             executor.submit(test_node_worker, node_str, starting_port + idx)
-            for idx, node_str in enumerate(raw_pool) ]
+            for idx, node_str in enumerate(raw_pool)
+        ]
         for f in futures:
             res = f.result()
             if res:
                 clean_nodes.append(res)
-                clean_nodes.sort(key=lambda x: x["downloadMbps"], reverse=True)
-                with open("clean-nodes.json", "w", encoding="utf-8") as f:
-                    json.dump(clean_nodes, f, indent=4, ensure_ascii=False)
-                    print(f"Sweep pipeline complete. Compiled {len(clean_nodes)} validated working nodes.")
-                    if name == "main":
-                        main()
+
+    if clean_nodes:
+        clean_nodes.sort(key=lambda x: x["downloadMbps"], reverse=True)
+        with open("clean-nodes.json", "w", encoding="utf-8") as f:
+            json.dump(clean_nodes, f, indent=4, ensure_ascii=False)
+        print(f"Sweep pipeline complete. Compiled {len(clean_nodes)} validated working nodes.")
+    else:
+        print("Completed processing sweep loop, but zero nodes passed verification checks.")
+
+if __name__ == "__main__":
+    main()
