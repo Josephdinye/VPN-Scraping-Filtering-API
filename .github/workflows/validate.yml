@@ -2,18 +2,18 @@ name: Global Node Validation API Sync
 
 on:
   schedule:
-    - cron: "0 */3 * * *"
+    - cron: "*/30 * * * *" # Every 30 minutes
   workflow_dispatch:
   push:
     branches: [main]
 
 permissions:
-  contents: write # <-- THIS FIXES 403
+  contents: write
 
 jobs:
   sweep-and-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,11 +38,17 @@ jobs:
         run: |
           git config user.name "vpn-bot"
           git config user.email "bot@github.com"
-          git add raw/ dist/
-          WORKING=$(cat dist/working.txt | wc -l)
-          if git diff --staged --quiet; then
-            echo "No changes"
+          git pull --rebase origin main || true
+          git add raw/ dist/ api/ || true
+          if [! -f dist/working.txt ]; then
+            echo "No working file"
             exit 0
           fi
-          git commit -m "auto: $WORKING working nodes"
+          WORKING=$(cat dist/working.txt | wc -l)
+          echo "Working: $WORKING nodes"
+          if git diff --staged --quiet; then
+            echo "No changes - same nodes"
+            exit 0
+          fi
+          git commit -m "auto: $WORKING working nodes $(date -u +'%Y-%m-%d %H:%M')"
           git push
