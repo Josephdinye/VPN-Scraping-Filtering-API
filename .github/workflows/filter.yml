@@ -1,0 +1,36 @@
+name: Global Node Validation API Sync
+
+on:
+  schedule:
+    - cron: '*/20 * * * *' # Executes automated sweeps every 20 minutes
+  workflow_dispatch: # Allows you to manually trigger a test sweep via the GitHub website
+
+jobs:
+  sweep-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Crucial permission allowing the bot to save clean-nodes.json back to your repo
+
+    steps:
+    - name: Checkout Code Base Repository
+      uses: actions/checkout@v4
+
+    - name: Setup Python Runtime Env
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install Network Protocol Handlers
+      run: |
+        pip install -r requirements.txt
+        sudo apt-get update && sudo apt-get install -y unzip
+
+    - name: Run Core Optimization Tests
+      run: python filter_nodes.py
+
+    - name: Deploy Fresh Filtered Output Feed Link
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add clean-nodes.json
+        git diff-index --quiet HEAD || (git commit -m "API Feed Update: Purged broken tunnels" && git push)
